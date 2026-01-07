@@ -1,0 +1,542 @@
+
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import {
+  getFirestore,
+  collection,
+  onSnapshot,
+  addDoc,
+  updateDoc,
+  doc,
+  setDoc,
+  serverTimestamp,
+  query,
+  orderBy,
+  arrayUnion
+} from 'firebase/firestore';
+import {
+  getAuth,
+  signInAnonymously,
+  onAuthStateChanged,
+  signInWithCustomToken
+} from 'firebase/auth';
+import {
+  LayoutDashboard,
+  PlusCircle,
+  MessageSquare,
+  X,
+  Loader2,
+  Send,
+  Clock,
+  ArrowRight,
+  ChevronRight,
+  Settings as SettingsIcon,
+  ChevronDown,
+  ChevronUp,
+  Trash2,
+  Edit3,
+  History,
+  FileText,
+  MoveHorizontal
+} from 'lucide-react';
+
+// ==========================================
+// 1. SERVICES & CONFIGURATION
+// ==========================================
+const firebaseConfig = {
+  apiKey: "AIzaSyDESSKXtqR3D00-b_M7oBqbqOJ6GIzydJk",
+  authDomain: "project-timeline-track.firebaseapp.com",
+  projectId: "project-timeline-track",
+  storageBucket: "project-timeline-track.firebasestorage.app",
+  messagingSenderId: "910675827292",
+  appId: "1:910675827292:web:8bebef089cc5d6b3e4e499"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = 'project-tracker-v3';
+
+// ==========================================
+// 2. REUSABLE UI COMPONENTS
+// ==========================================
+
+const Navbar = ({ view, setView }) => (
+  <nav className="bg-white/80 backdrop-blur-md border-b border-slate-200 px-4 md:px-8 py-4 flex items-center justify-between sticky top-0 z-50">
+    <div className="flex items-center gap-2 md:gap-3">
+      <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-2 rounded-xl shadow-lg shadow-indigo-200">
+        <LayoutDashboard className="text-white w-5 h-5" />
+      </div>
+      <h1 className="font-black text-lg md:text-xl tracking-tight text-slate-800">Project<span className="text-indigo-600">Track</span></h1>
+    </div>
+    <div className="flex gap-1 md:gap-2 bg-slate-100 p-1 rounded-xl border border-slate-200">
+      <NavItem active={view === 'board'} onClick={() => setView('board')}>Track</NavItem>
+      <NavItem active={view === 'overview'} onClick={() => setView('overview')}>Logs</NavItem>
+      <button
+        onClick={() => setView('settings')}
+        className={`p-2 rounded-lg transition-all ${view === 'settings' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+      >
+        <SettingsIcon size={18} />
+      </button>
+      <button
+        onClick={() => setView('add')}
+        className="ml-1 md:ml-2 flex items-center gap-2 px-3 md:px-5 py-2 rounded-lg bg-slate-900 text-white text-xs md:text-sm font-bold hover:bg-slate-800 transition shadow-md"
+      >
+        <PlusCircle size={16} className="hidden xs:block" /> New
+      </button>
+    </div>
+  </nav>
+);
+
+const NavItem = ({ children, active, onClick }) => (
+  <button
+    onClick={onClick}
+    className={`px-3 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold transition-all ${active ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+  >
+    {children}
+  </button>
+);
+
+// ==========================================
+// 3. FEATURE MODULES
+// ==========================================
+
+const BoardView = ({ projects, checkpoints, onDrop, onDragStart, onOpenNote }) => {
+  const [selectedForMove, setSelectedForMove] = useState(null);
+
+  const handleMobileMove = async (projectId, newStatus) => {
+    await onDrop({ dataTransfer: { getData: () => projectId }, preventDefault: () => { } }, newStatus);
+    setSelectedForMove(null);
+  };
+
+  return (
+    <div className="relative mt-16 pb-20 overflow-x-auto">
+      <div className="relative min-w-[1000px] md:min-w-full pt-12">
+        <div className="absolute top-[60px] left-0 w-full h-[2px] bg-slate-200" style={{ zIndex: 0 }}>
+          <div
+            className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-1000"
+            style={{ width: '100%' }}
+          />
+        </div>
+
+        <div className="relative flex justify-between">
+          {checkpoints.map((checkpoint) => (
+            <div
+              key={checkpoint}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => onDrop(e, checkpoint)}
+              className="relative flex flex-col items-center group w-full"
+            >
+              <div className="absolute -top-10 text-center w-full">
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 group-hover:text-indigo-600 transition-colors whitespace-nowrap">
+                  {checkpoint}
+                </span>
+              </div>
+
+              <div className={`z-10 w-6 h-6 rounded-full border-4 transition-all duration-300 ${projects.some(p => p.status === checkpoint) ? 'bg-indigo-600 border-indigo-100 scale-125 shadow-lg shadow-indigo-200' : 'bg-white border-slate-200 group-hover:border-indigo-300'}`} />
+
+              <div className="mt-12 w-full flex flex-col items-center gap-4 px-2 min-h-[400px]">
+                {projects.filter(p => p.status === checkpoint).map((project) => (
+                  <ProjectCard
+                    key={project.id}
+                    project={project}
+                    onDragStart={onDragStart}
+                    onOpenNote={onOpenNote}
+                    onMoveClick={() => setSelectedForMove(project)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {selectedForMove && (
+        <div className="fixed inset-0 z-[100] flex items-end justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="bg-white w-full max-w-md rounded-t-[32px] p-8 animate-in slide-in-from-bottom-full">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="font-black text-xl">Move Project</h3>
+              <button onClick={() => setSelectedForMove(null)}><X /></button>
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              {checkpoints.map(cp => (
+                <button
+                  key={cp}
+                  disabled={cp === selectedForMove.status}
+                  onClick={() => handleMobileMove(selectedForMove.id, cp)}
+                  className={`p-4 rounded-2xl font-bold text-left flex justify-between items-center ${cp === selectedForMove.status ? 'bg-slate-50 text-slate-300' : 'bg-slate-100 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600'}`}
+                >
+                  {cp}
+                  {cp === selectedForMove.status && <div className="text-[10px] uppercase font-black">Current</div>}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ProjectCard = ({ project, onDragStart, onOpenNote, onMoveClick }) => (
+  <div
+    draggable
+    onDragStart={(e) => onDragStart(e, project.id)}
+    className="w-full max-w-[240px] bg-white p-4 rounded-2xl shadow-sm border-2 border-slate-100 hover:border-indigo-400 hover:shadow-xl transition-all cursor-grab active:cursor-grabbing group animate-in zoom-in-95 touch-none"
+  >
+    <div className="flex justify-between items-start mb-2">
+      <span className="text-[9px] font-black text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md uppercase">{project.version}</span>
+      <div className="flex gap-2">
+        <button onClick={(e) => { e.stopPropagation(); onMoveClick(); }} className="md:hidden p-1 text-slate-300 hover:text-indigo-500">
+          <MoveHorizontal size={14} />
+        </button>
+        <button onClick={(e) => { e.stopPropagation(); onOpenNote(project.id); }} className="p-1 text-slate-300 hover:text-indigo-500">
+          <MessageSquare size={14} />
+        </button>
+      </div>
+    </div>
+    <h3 className="font-bold text-slate-800 text-sm leading-snug line-clamp-2">{project.name}</h3>
+    <div className="mt-3 flex items-center justify-between text-[10px] text-slate-400 font-bold border-t border-slate-50 pt-2 uppercase tracking-tighter">
+      <span>{project.history?.filter(h => h.type === 'note').length || 0} Notes</span>
+      <ChevronRight size={12} />
+    </div>
+  </div>
+);
+
+const SettingsPage = ({ checkpoints, onSave }) => {
+  const [list, setList] = useState(checkpoints);
+  const [newItem, setNewItem] = useState('');
+
+  const updateItem = (index, val) => {
+    const next = [...list];
+    next[index] = val;
+    setList(next);
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto py-6 md:py-10 animate-in fade-in slide-in-from-bottom-4">
+      <div className="bg-white rounded-[32px] border border-slate-200 shadow-2xl overflow-hidden">
+        <div className="p-6 md:p-8 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl md:text-2xl font-black text-slate-900 tracking-tight">Board Setup</h2>
+            <p className="text-xs md:text-sm text-slate-500 font-medium">Define your project lifecycle.</p>
+          </div>
+          <div className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-black uppercase tracking-wider">Config</div>
+        </div>
+
+        <div className="p-6 md:p-8 space-y-4">
+          {list.map((item, idx) => (
+            <div key={idx} className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100 focus-within:bg-white focus-within:border-indigo-200 transition-all">
+              <span className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center text-xs font-black shrink-0">{idx + 1}</span>
+              <input
+                type="text"
+                value={item}
+                onChange={(e) => updateItem(idx, e.target.value)}
+                className="flex-1 bg-transparent border-none outline-none font-bold text-slate-700 text-sm"
+              />
+              <button onClick={() => setList(list.filter((_, i) => i !== idx))} className="p-2 text-slate-300 hover:text-red-500"><Trash2 size={18} /></button>
+            </div>
+          ))}
+          <div className="flex gap-2 pt-4 border-t border-slate-100">
+            <input
+              placeholder="New stage..."
+              className="flex-1 p-3 md:p-4 bg-slate-50 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold"
+              value={newItem}
+              onChange={e => setNewItem(e.target.value)}
+            />
+            <button onClick={() => { if (newItem) { setList([...list, newItem]); setNewItem(''); } }} className="px-4 md:px-6 bg-slate-900 text-white rounded-2xl font-black text-sm">Add</button>
+          </div>
+        </div>
+        <div className="p-6 md:p-8 bg-slate-50 border-t border-slate-100 flex justify-end">
+          <button onClick={() => onSave(list)} className="w-full md:w-auto px-10 py-4 bg-indigo-600 text-white font-black rounded-2xl shadow-xl hover:bg-indigo-700 transition-all">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ==========================================
+// 4. MAIN APPLICATION COMPONENT
+// ==========================================
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [checkpoints, setCheckpoints] = useState(["Backlog", "Design", "Dev", "UAT", "Live"]);
+  const [view, setView] = useState('board');
+  const [activeProjectId, setActiveProjectId] = useState(null);
+  const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        // Modified to only support anonymous auth for now as we don't have token injection mechanism.
+        await signInAnonymously(auth);
+      } catch (err) {
+        console.error("Auth initialization failed:", err);
+      }
+    };
+    initAuth();
+    return onAuthStateChanged(auth, setUser);
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    // Use proper pathing for public data to avoid permission errors
+    const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config');
+    const unsubConfig = onSnapshot(configRef, (snap) => {
+      if (snap.exists()) setCheckpoints(snap.data().checkpoints);
+    }, (err) => console.error("Config fetch error:", err));
+
+    const projectsRef = collection(db, 'artifacts', appId, 'public', 'data', 'projects');
+    const q = query(projectsRef, orderBy('createdAt', 'desc'));
+    const unsubProjects = onSnapshot(q, (snap) => {
+      setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setLoading(false);
+    }, (err) => {
+      console.error("Projects fetch error:", err);
+      setLoading(false);
+    });
+
+    return () => { unsubConfig(); unsubProjects(); };
+  }, [user]);
+
+  const handleDrop = async (e, newStatus) => {
+    if (!user) return;
+    const projectId = e.dataTransfer?.getData ? e.dataTransfer.getData("projectId") : e.dataTransfer.getData();
+    if (!projectId) return; // Prevent errors if data transfer is empty
+    const project = projects.find(p => p.id === projectId);
+    if (!project || project.status === newStatus) return;
+
+    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'projects', projectId), {
+      status: newStatus,
+      updatedAt: serverTimestamp(),
+      history: arrayUnion({
+        type: 'status_change',
+        from: project.status,
+        to: newStatus,
+        timestamp: new Date().toISOString()
+      })
+    });
+  };
+
+  const addNote = async (projectId, text) => {
+    if (!user) return;
+    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'projects', projectId), {
+      history: arrayUnion({ type: 'note', text, timestamp: new Date().toISOString() }),
+      updatedAt: serverTimestamp()
+    });
+    setIsNoteModalOpen(false);
+  };
+
+  const saveConfig = async (newList) => {
+    if (!user) return;
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), { checkpoints: newList });
+      setView('board');
+    } catch (error) {
+      console.error("Failed to save config:", error);
+      alert("Failed to save settings. Please check your permissions.");
+    }
+  };
+
+  if (loading) return <div className="flex items-center justify-center h-screen bg-slate-50"><Loader2 className="animate-spin text-indigo-600 w-8 h-8" /></div>;
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans selection:bg-indigo-100">
+      <Navbar view={view} setView={setView} />
+
+      <main className="px-4 md:px-8 py-6 md:py-8 max-w-[1600px] mx-auto">
+        {view === 'board' && (
+          <BoardView
+            projects={projects}
+            checkpoints={checkpoints}
+            onDrop={handleDrop}
+            onDragStart={(e, id) => e.dataTransfer.setData("projectId", id)}
+            onOpenNote={(id) => { setActiveProjectId(id); setIsNoteModalOpen(true); }}
+          />
+        )}
+        {view === 'overview' && <OverviewPage projects={projects} />}
+        {view === 'settings' && <SettingsPage checkpoints={checkpoints} onSave={saveConfig} />}
+        {view === 'add' && <ProjectForm onCancel={() => setView('board')} onSubmit={async (name, ver) => {
+          if (!user) return;
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'projects'), {
+            name, version: ver, status: checkpoints[0], createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+            history: [{ type: 'status_change', from: null, to: checkpoints[0], timestamp: new Date().toISOString() }]
+          });
+          setView('board');
+        }} />}
+      </main>
+
+      {isNoteModalOpen && (
+        <NoteModal
+          project={projects.find(p => p.id === activeProjectId)}
+          onClose={() => setIsNoteModalOpen(false)}
+          onAdd={addNote}
+        />
+      )}
+    </div>
+  );
+}
+
+function OverviewPage({ projects }) {
+  const [expanded, setExpanded] = useState({});
+  const [historyExpanded, setHistoryExpanded] = useState({});
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
+      <header className="mb-8">
+        <h2 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight">Audit Trail</h2>
+        <p className="text-slate-500 font-medium">Full historical logs of every version.</p>
+      </header>
+
+      {projects.map(p => {
+        const notes = p.history?.filter(h => h.type === 'note') || [];
+        const statusChanges = p.history?.filter(h => h.type === 'status_change') || [];
+
+        return (
+          <div key={p.id} className="bg-white rounded-[32px] border border-slate-200 overflow-hidden shadow-sm">
+            <button
+              onClick={() => setExpanded(e => ({ ...e, [p.id]: !e[p.id] }))}
+              className="w-full p-6 md:p-8 flex justify-between items-center hover:bg-slate-50/50 transition-colors text-left"
+            >
+              <div className="flex gap-4 md:gap-5 items-center">
+                <div className="bg-indigo-50 p-3 rounded-2xl hidden xs:block">
+                  <FileText className="text-indigo-600 w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[9px] font-black text-indigo-600 bg-indigo-50/50 px-2 py-0.5 rounded uppercase tracking-wider mb-1 inline-block">
+                    {p.version}
+                  </span>
+                  <h3 className="font-bold text-slate-900 text-base md:text-lg">{p.name}</h3>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] font-black uppercase text-slate-400 hidden sm:block">{p.status}</span>
+                <div className="bg-slate-100 p-2 rounded-xl text-slate-400">
+                  {expanded[p.id] ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                </div>
+              </div>
+            </button>
+
+            {expanded[p.id] && (
+              <div className="p-6 md:p-8 border-t border-slate-100 bg-white animate-in slide-in-from-top-2">
+                <div className="mb-8">
+                  <div className="flex items-center gap-2 mb-6">
+                    <MessageSquare size={16} className="text-indigo-500" />
+                    <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest">Notes Feed</h4>
+                  </div>
+
+                  {notes.length > 0 ? (
+                    <div className="space-y-4">
+                      {notes.map((note, i) => (
+                        <div key={i} className="bg-slate-50 p-5 rounded-2xl border border-slate-100 relative">
+                          <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase mb-2">
+                            <Clock size={12} />
+                            {new Date(note.timestamp).toLocaleString()}
+                          </div>
+                          <p className="text-slate-700 text-sm leading-relaxed font-medium">{note.text}</p>
+                        </div>
+                      )).reverse()}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-400 font-bold uppercase text-center py-4">No notes</p>
+                  )}
+                </div>
+
+                <div className="border-t border-slate-100 pt-6">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setHistoryExpanded(h => ({ ...h, [p.id]: !h[p.id] })); }}
+                    className="flex items-center justify-between w-full p-4 bg-slate-50 rounded-2xl hover:bg-slate-100 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <History size={16} className="text-slate-400" />
+                      <span className="text-xs font-black text-slate-500 uppercase tracking-widest">Movement Log</span>
+                    </div>
+                    {historyExpanded[p.id] ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+                  </button>
+
+                  {historyExpanded[p.id] && (
+                    <div className="mt-4 px-2 space-y-4 animate-in slide-in-from-top-2">
+                      {statusChanges.map((h, i) => (
+                        <div key={i} className="flex gap-4 items-start py-1">
+                          <div className="flex flex-col items-center pt-1.5">
+                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            <div className="w-px h-8 bg-slate-100 mt-2" />
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-black text-slate-400 block mb-1">
+                              {new Date(h.timestamp).toLocaleString()}
+                            </span>
+                            <div className="flex items-center gap-2 text-[10px] font-bold text-slate-600">
+                              <span className="bg-slate-100 px-2 py-0.5 rounded">{h.from || 'Start'}</span>
+                              <ArrowRight size={10} className="text-slate-300" />
+                              <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-100">{h.to}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )).reverse()}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function NoteModal({ project, onClose, onAdd }) {
+  const [text, setText] = useState('');
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+      <div className="bg-white w-full max-w-md rounded-[32px] shadow-2xl p-6 md:p-8 animate-in zoom-in-95">
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="font-black text-xl text-slate-900">Add Progress Note</h3>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition-colors"><X /></button>
+        </div>
+        <textarea
+          autoFocus
+          className="w-full h-40 p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl mb-6 outline-none focus:border-indigo-500 transition-all text-sm font-medium"
+          value={text}
+          onChange={e => setText(e.target.value)}
+          placeholder="What happened today?"
+        />
+        <div className="flex justify-end gap-3">
+          <button onClick={onClose} className="font-bold text-slate-400 px-4 py-2">Cancel</button>
+          <button
+            disabled={!text.trim()}
+            onClick={() => onAdd(project.id, text)}
+            className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-black shadow-xl hover:bg-indigo-700 disabled:opacity-50 transition-all"
+          >
+            Save Note
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectForm({ onSubmit, onCancel }) {
+  const [name, setName] = useState('');
+  const [ver, setVer] = useState('');
+  return (
+    <div className="max-w-xl mx-auto py-6 md:py-10">
+      <form className="bg-white p-8 md:p-10 rounded-[40px] border border-slate-200 shadow-2xl" onSubmit={e => { e.preventDefault(); onSubmit(name, ver); }}>
+        <h2 className="text-2xl font-black text-slate-900 mb-8">New Release</h2>
+        <div className="space-y-6">
+          <input required placeholder="Project Name" className="w-full p-4 md:p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl font-bold outline-none focus:border-indigo-500 transition-all text-sm" value={name} onChange={e => setName(e.target.value)} />
+          <input required placeholder="Version (e.g. 1.0)" className="w-full p-4 md:p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl font-bold outline-none focus:border-indigo-500 transition-all text-sm" value={ver} onChange={e => setVer(e.target.value)} />
+          <div className="flex gap-4 pt-4">
+            <button type="button" onClick={onCancel} className="flex-1 font-black text-slate-400">Back</button>
+            <button type="submit" className="flex-1 py-4 bg-slate-900 text-white font-black rounded-2xl shadow-xl">Initiate</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
